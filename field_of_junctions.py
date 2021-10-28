@@ -369,7 +369,7 @@ class FieldOfJunctions:
             patches.view(N, C*self.opts.R**2, -1)).view(N, C, self.H, self.W) / \
                 self.num_patches.unsqueeze(0).unsqueeze(0)
 
-    def get_best_inds(self, params, lmbda_boundary, lmbda_color):
+        def get_best_inds(self, params, lmbda_boundary, lmbda_color):
         """
         Compute the best index along the 0th dimension of `params` for each pixel position.
         Has two possible modes determined by self.opts.parallel_mode:
@@ -468,15 +468,22 @@ class FieldOfJunctions:
             tau13 = g(torch.remainder(angle3 - angle1, 2*np.pi)) * tau
             dist13 = sgn13 * torch.min( sgn13 * (-torch.sin(angle1) * (self.x - x0) + torch.cos(angle1) * (self.y - y0)),
                                        -sgn13 * (-torch.sin(angle3) * (self.x - x0) + torch.cos(angle3) * (self.y - y0))) + tau13
-        
+            out = torch.stack([dist13, dist42], dim=1)
+            
         if self.apv == 2:
             sgn12 = torch.where(torch.remainder(angle2 - angle1, 2 * np.pi) < np.pi,
                                 torch.ones_like(angle2), -torch.ones_like(angle2))
             tau12 = g(torch.remainder(angle2 - angle1, 2*np.pi)) * tau
             dist12 = sgn12 * torch.min( sgn12 * (-torch.sin(angle1) * (self.x - x0) + torch.cos(angle1) * (self.y - y0)),
                                        -sgn12 * (-torch.sin(angle2) * (self.x - x0) + torch.cos(angle2) * (self.y - y0))) + tau12
-        
-        return torch.stack([dist12, dist12], dim=1)
+            
+            sgn21 = torch.where(torch.remainder(angle1 - angle2, 2 * np.pi) < np.pi,
+                                torch.ones_like(angle1), -torch.ones_like(angle1))
+            tau21 = g(torch.remainder(angle1 - angle2, 2*np.pi)) * tau
+            dist21 = sgn21 * torch.min( sgn21 * (-torch.sin(angle2) * (self.x - x0) + torch.cos(angle2) * (self.y - y0)),
+                                       -sgn21 * (-torch.sin(angle1) * (self.x - x0) + torch.cos(angle1) * (self.y - y0))) + tau21
+            out = torch.stack([dist12, dist21], dim=1)
+        return out
 
     def dists2indicators(self, dists):
         """
