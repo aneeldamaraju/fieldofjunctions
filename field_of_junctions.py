@@ -19,6 +19,7 @@ class FieldOfJunctions:
                stride                     Stride for junctions (e.g. opts.stride == 1 is a dense field of junctions)
                eta                        Width parameter for Heaviside functions
                delta                      Width parameter for boundary maps
+               ang_per_vertex             Number of angles at each vertex (generally 3) 
                lr_angles                  Angle learning rate
                lr_x0y0                    Vertex position learning rate
                lambda_boundary_final      Final value of spatial boundary consistency term
@@ -48,9 +49,12 @@ class FieldOfJunctions:
         t_img = torch.tensor(img, device=dev).permute(2, 0, 1).unsqueeze(0)   # input image, shape [1, C, H, W]
         self.img_patches = nn.Unfold(opts.R, stride=opts.stride)(t_img).view(1, self.C, opts.R, opts.R,
                                                                              self.H_patches, self.W_patches)
-
+            
+        ## Save number of angles per vertex
+        self.apv = opts.ang_per_vertex
+        
         # Create pytorch variables for angles and vertex position for each patch
-        self.angles = torch.zeros(1, 3, self.H_patches, self.W_patches, dtype=torch.float32, device=dev)
+        self.angles = torch.zeros(1, self.apv, self.H_patches, self.W_patches, dtype=torch.float32, device=dev)
         self.x0y0   = torch.zeros(1, 2, self.H_patches, self.W_patches, dtype=torch.float32, device=dev)
 
         # Compute gradients for angles and vertex positions
@@ -137,10 +141,10 @@ class FieldOfJunctions:
         params = torch.cat([self.angles, self.x0y0], dim=1).detach()
 
         # Run one step of Algorithm 2, sequentially improving each coordinate
-        for i in range(5):
+        for i in range(self.apv+2):
             # Repeat the set of parameters `nvals` times along 0th dimension
             params_query = params.repeat(self.opts.nvals, 1, 1, 1)
-            param_range = self.angle_range if i < 3 else self.x0y0_range
+            param_range = self.angle_range if i < self.apv else self.x0y0_range
             params_query[:, i, :, :] = params_query[:, i, :, :] + param_range.view(-1, 1, 1)
             best_ind = self.get_best_inds(params_query, lmbda_boundary, lmbda_color)
 
@@ -152,22 +156,22 @@ class FieldOfJunctions:
 
         # Heuristic for accelerating convergence (not necessary but sometimes helps):
         # Update x0 and y0 along the three optimal angles (search over a line passing through current x0, y0)
-        for i in range(3):
+        for i in range(self.apv):
             params_query = params.repeat(self.opts.nvals, 1, 1, 1)
-            params_query[:, 3, :, :] = params[:, 3, :, :] + torch.cos(params[:, i, :, :]) * self.x0y0_range.view(-1, 1, 1)
-            params_query[:, 4, :, :] = params[:, 4, :, :] + torch.sin(params[:, i, :, :]) * self.x0y0_range.view(-1, 1, 1)
+            params_query[:, self.apv, :, :] = params[:, self.apv, :, :] + torch.cos(params[:, i, :, :]) * self.x0y0_range.view(-1, 1, 1)
+            params_query[:, self.apv+1, :, :] = params[:, self.apv+1, :, :] + torch.sin(params[:, i, :, :]) * self.x0y0_range.view(-1, 1, 1)
             best_ind = self.get_best_inds(params_query, lmbda_boundary, lmbda_color)
 
             # Update vertex positions of parameters
-            for j in range(3, 5):
+            for j in range(self.apv, self.apv+2):
                 params[:, j, :, :] = params_query[best_ind.view(1, self.H_patches, self.W_patches),
                                                   j,
                                                   torch.arange(self.H_patches).view(1, -1, 1),
                                                   torch.arange(self.W_patches).view(1, 1, -1)]
 
         # Update angles and vertex position using the best values found
-        self.angles.data = params[:, :3, :, :].data
-        self.x0y0.data   = params[:, 3:, :, :].data
+        self.angles.data = params[:, :self.apv, :, :].data
+        self.x0y0.data   = params[:, self.apv:, :, :].data
         
         # Update global boundaries and image
         dists, colors, patches = self.get_dists_and_patches(params, lmbda_color)
@@ -422,42 +426,57 @@ class FieldOfJunctions:
         -------
                  Tensor of shape [N, 2, R, R, H', W'] with samples of the two distance functions for every patch
         """
-        x0     = params[:, 3, :, :].unsqueeze(1).unsqueeze(1)   # shape [N, 1, 1, H', W']
-        y0     = params[:, 4, :, :].unsqueeze(1).unsqueeze(1)   # shape [N, 1, 1, H', W']
+        x0     = params[:, self.apv, :, :].unsqueeze(1).unsqueeze(1)   # shape [N, 1, 1, H', W']
+        y0     = params[:,  self.apv+1, :, :].unsqueeze(1).unsqueeze(1)   # shape [N, 1, 1, H', W']
 
         # Sort so angle1 <= angle2 <= angle3 (mod 2pi)
-        angles = torch.remainder(params[:, :3, :, :], 2 * np.pi)
-        angles = torch.sort(angles, dim=1)[0]
+        if self.apv == 3:
+            angles = torch.remainder(params[:, :3, :, :], 2 * np.pi)
+            angles = torch.sort(angles, dim=1)[0]
 
-        angle1 = angles[:, 0, :, :].unsqueeze(1).unsqueeze(1)   # shape [N, 1, 1, H', W']
-        angle2 = angles[:, 1, :, :].unsqueeze(1).unsqueeze(1)   # shape [N, 1, 1, H', W']
-        angle3 = angles[:, 2, :, :].unsqueeze(1).unsqueeze(1)   # shape [N, 1, 1, H', W']
+            angle1 = angles[:, 0, :, :].unsqueeze(1).unsqueeze(1)   # shape [N, 1, 1, H', W']
+            angle2 = angles[:, 1, :, :].unsqueeze(1).unsqueeze(1)   # shape [N, 1, 1, H', W']
+            angle3 = angles[:, 2, :, :].unsqueeze(1).unsqueeze(1)   # shape [N, 1, 1, H', W']
 
-        # Define another angle halfway between angle3 and angle1, clockwise from angle3
-        # This isn't critical but it seems a bit more stable for computing gradients
-        angle4 = 0.5 * (angle1 + angle3) + \
-                     torch.where(torch.remainder(0.5 * (angle1 - angle3), 2 * np.pi) >= np.pi,
+            # Define another angle halfway between angle3 and angle1, clockwise from angle3
+            # This isn't critical but it seems a bit more stable for computing gradients
+            angle4 = 0.5 * (angle1 + angle3) + \
+                         torch.where(torch.remainder(0.5 * (angle1 - angle3), 2 * np.pi) >= np.pi,
                                  torch.ones_like(angle1) * np.pi, torch.zeros_like(angle1))
+        if self.apv == 2:
+            angles = torch.remainder(params[:, :2, :, :], 2 * np.pi)
+            angles = torch.sort(angles, dim=1)[0]
+
+            angle1 = angles[:, 0, :, :].unsqueeze(1).unsqueeze(1)   # shape [N, 1, 1, H', W']
+            angle2 = angles[:, 1, :, :].unsqueeze(1).unsqueeze(1)   # shape [N, 1, 1, H', W']
 
         def g(dtheta):
             # Map from [0, 2pi] to [-1, 1]
             return (dtheta / np.pi - 1.0) ** 35
 
         # Compute the two distance functions
-        sgn42 = torch.where(torch.remainder(angle2 - angle4, 2 * np.pi) < np.pi,
-                            torch.ones_like(angle2), -torch.ones_like(angle2))
-        tau42 = g(torch.remainder(angle2 - angle4, 2*np.pi)) * tau
+        if self.apv == 3:
+            sgn42 = torch.where(torch.remainder(angle2 - angle4, 2 * np.pi) < np.pi,
+                                torch.ones_like(angle2), -torch.ones_like(angle2))
+            tau42 = g(torch.remainder(angle2 - angle4, 2*np.pi)) * tau
 
-        dist42 = sgn42 * torch.min( sgn42 * (-torch.sin(angle4) * (self.x - x0) + torch.cos(angle4) * (self.y - y0)),
-                                   -sgn42 * (-torch.sin(angle2) * (self.x - x0) + torch.cos(angle2) * (self.y - y0))) + tau42
+            dist42 = sgn42 * torch.min( sgn42 * (-torch.sin(angle4) * (self.x - x0) + torch.cos(angle4) * (self.y - y0)),
+                                       -sgn42 * (-torch.sin(angle2) * (self.x - x0) + torch.cos(angle2) * (self.y - y0))) + tau42
 
-        sgn13 = torch.where(torch.remainder(angle3 - angle1, 2 * np.pi) < np.pi,
-                            torch.ones_like(angle3), -torch.ones_like(angle3))
-        tau13 = g(torch.remainder(angle3 - angle1, 2*np.pi)) * tau
-        dist13 = sgn13 * torch.min( sgn13 * (-torch.sin(angle1) * (self.x - x0) + torch.cos(angle1) * (self.y - y0)),
-                                   -sgn13 * (-torch.sin(angle3) * (self.x - x0) + torch.cos(angle3) * (self.y - y0))) + tau13
-
-        return torch.stack([dist13, dist42], dim=1)
+            sgn13 = torch.where(torch.remainder(angle3 - angle1, 2 * np.pi) < np.pi,
+                                torch.ones_like(angle3), -torch.ones_like(angle3))
+            tau13 = g(torch.remainder(angle3 - angle1, 2*np.pi)) * tau
+            dist13 = sgn13 * torch.min( sgn13 * (-torch.sin(angle1) * (self.x - x0) + torch.cos(angle1) * (self.y - y0)),
+                                       -sgn13 * (-torch.sin(angle3) * (self.x - x0) + torch.cos(angle3) * (self.y - y0))) + tau13
+        
+        if self.apv == 2:
+            sgn12 = torch.where(torch.remainder(angle2 - angle1, 2 * np.pi) < np.pi,
+                                torch.ones_like(angle2), -torch.ones_like(angle2))
+            tau12 = g(torch.remainder(angle2 - angle1, 2*np.pi)) * tau
+            dist12 = sgn12 * torch.min( sgn12 * (-torch.sin(angle1) * (self.x - x0) + torch.cos(angle1) * (self.y - y0)),
+                                       -sgn12 * (-torch.sin(angle2) * (self.x - x0) + torch.cos(angle2) * (self.y - y0))) + tau12
+        
+        return torch.stack([dist12, dist12], dim=1)
 
     def dists2indicators(self, dists):
         """
