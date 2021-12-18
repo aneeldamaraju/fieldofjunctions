@@ -369,7 +369,7 @@ class FieldOfJunctions:
             patches.view(N, C*self.opts.R**2, -1)).view(N, C, self.H, self.W) / \
                 self.num_patches.unsqueeze(0).unsqueeze(0)
 
-        def get_best_inds(self, params, lmbda_boundary, lmbda_color):
+    def get_best_inds(self, params, lmbda_boundary, lmbda_color):
         """
         Compute the best index along the 0th dimension of `params` for each pixel position.
         Has two possible modes determined by self.opts.parallel_mode:
