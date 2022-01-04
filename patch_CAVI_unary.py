@@ -23,7 +23,7 @@ def get_permutations(region_patches):
     return region_patches[0, 0, perm_list.permute(1, 0), 0, :, :, :, :]  # [3, 6, RF, RF, H_patches, W_patches]
 
 
-def resolve_permutations_mrf(permutations, stride, neighborhood=4, max_iters=None, func=None, func2=None, seed=None):
+def resolve_permutations_mrf(permutations, stride, neighborhood=4, unary = None, max_iters=None, func=None, func2=None, seed=None):
     """
     #region_patches has shape [1, 1, 3, 1, RF, RF, H_patches, W_patches]
     permutations has shape [3, 6, RF, RF, H_patches, W_patches]
@@ -125,8 +125,14 @@ def resolve_permutations_mrf(permutations, stride, neighborhood=4, max_iters=Non
         # Update parameters according to CAVI update
         lmbdas[:, 1:-1, 1:-1] = torch.exp(s)
 
+
         # Normalize and reset top-left distribution
+
         lmbdas /= lmbdas.sum(dim=0, keepdim=True)
+        if unary is not None:
+            lmbdas[:, 1:-1, 1:-1] += unary * ((max_iters-t)/max_iters) #Product term to reduce strength of prior over time
+            lmbdas /= lmbdas.sum(dim=0, keepdim=True)
+
         lmbdas[0, seed[0] + 1, seed[1] + 1] = 1.0
         lmbdas[1:, seed[0] + 1, seed[1] + 1] = 0.0
 
