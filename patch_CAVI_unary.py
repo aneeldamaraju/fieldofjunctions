@@ -102,7 +102,6 @@ def resolve_permutations_mrf(permutations, stride, neighborhood=4, unary = None,
     lmbdas[0, seed[0] + 1, seed[1] + 1] = 1.0
     lmbdas[1:, seed[0] + 1, seed[1] + 1] = 0.0
     for t in range(max_iters):
-
         # Left neighbor:   sum over permutations of the (i, j-1)th patch, i.e. dimension 0
         s = (lmbdas.unsqueeze(1)[:, :, 1:-1, :-2] * horizontal_logpsi[:, :, 1:-1, :-1]).sum(dim=0)
         # Right neighbor:  sum over permutations of the (i, j+1)th patch, i.e. dimension 1
